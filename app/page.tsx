@@ -32,12 +32,8 @@ const heroImages = {
 };
 
 const heroSlides = [
-  { label: 'City / Skyline living', video: '/videos/city/CAP.mp4', fallback: heroImages.city },
-  { label: 'Beach / Coastal escape', image: heroImages.beach },
-  { label: 'Countryside / Highland retreat', image: heroImages.countryside },
-  { label: 'City / A considered stay', image: heroImages.cityInterior },
-  { label: 'Beach / First light', image: heroImages.beachInterior },
-  { label: 'Countryside / Golden hour', image: heroImages.countrysideInterior },
+  { label: 'Beach / Coastal escape', video: '/videos/BVID^^.mp4', fallback: heroImages.beach },
+  { label: 'City / Skyline living', video: '/videos/CSIDE.mp4', fallback: heroImages.city },
 ];
 
 type Collection = 'All' | 'City' | 'Countryside' | 'Beach';
