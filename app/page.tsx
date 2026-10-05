@@ -148,7 +148,7 @@ export default function Home() {
               <source src={heroSlides[heroSlide].video} type="video/mp4" />
             </video>
           ) : (
-            <img key={heroSlides[heroSlide].image} src={heroSlides[heroSlide].image} alt="" />
+            <img key={heroSlides[heroSlide].fallback} src={heroSlides[heroSlide].fallback} alt="" />
           )}
         </div>
         <nav className="nav container">
