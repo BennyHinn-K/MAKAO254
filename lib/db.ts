@@ -1,7 +1,4 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import * as bcrypt from 'bcryptjs';
-import { generateSecret } from 'otplib';
+import { Pool, type QueryResultRow } from 'pg';
 
 export type Collection = 'city' | 'countryside' | 'beach';
 export type PropertyStatus = 'draft' | 'published';
@@ -83,575 +80,407 @@ export interface AdminSession {
   created_at: string;
 }
 
-interface DatabaseShape {
-  properties: Property[];
-  bookings: Booking[];
-  reviews: Review[];
-  contact_messages: ContactMessage[];
-  admins: Admin[];
-  admin_sessions: AdminSession[];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string | null | undefined): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
 }
 
-const DB_DIR = path.resolve(process.cwd(), '.data');
-const DB_FILE = path.join(DB_DIR, 'makao254.json');
+/* ---------------- connection ---------------- */
 
-const PEXELS = {
-  nairobiSkyline: 'https://images.pexels.com/photos/11341669/pexels-photo-11341669.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  apartmentInterior: 'https://images.pexels.com/photos/3634634/pexels-photo-3634634.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  masterBedroom: 'https://images.pexels.com/photos/545012/pexels-photo-545012.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  rooftopPool: 'https://images.pexels.com/photos/261397/pexels-photo-261397.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  dianiBeach: 'https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  beachLiving: 'https://images.pexels.com/photos/271639/pexels-photo-271639.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  beachBedroom: 'https://images.pexels.com/photos/164595/pexels-photo-164595.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  beachPool: 'https://images.pexels.com/photos/1546168/pexels-photo-1546168.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  highland: 'https://images.pexels.com/photos/434263/pexels-photo-434263.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  lodgeLiving: 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  rusticBedroom: 'https://images.pexels.com/photos/5099325/pexels-photo-5099325.jpeg?auto=compress&cs=tinysrgb&w=1200',
-  safariTent: 'https://images.pexels.com/photos/7562315/pexels-photo-7562315.jpeg?auto=compress&cs=tinysrgb&w=1200',
-};
+const globalForPool = globalThis as unknown as { __makaoPool?: Pool };
 
-function uid() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
+function getPool(): Pool {
+  if (globalForPool.__makaoPool) return globalForPool.__makaoPool;
+
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is not set. See .env.example and run `npm run db:setup`.');
+  }
+  const isLocal = /(localhost|127\.0\.0\.1)/.test(connectionString);
+
+  globalForPool.__makaoPool = new Pool({
+    connectionString,
+    ssl: isLocal ? undefined : { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
   });
+  return globalForPool.__makaoPool;
 }
 
-function now() {
-  return new Date().toISOString();
+async function query<T extends QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {
+  const result = await getPool().query<T>(sql, params);
+  return result.rows;
 }
 
-const seed: DatabaseShape = {
-  properties: [
-    {
-      id: uid(),
-      title: 'The Lavington Loft — Skyline Living',
-      slug: 'the-lavington-loft',
-      collection: 'city',
-      description:
-        'A sun-drenched, design-led penthouse in the heart of Lavington, with wrap-around views of the Nairobi skyline, a private rooftop terrace, and interiors curated with modern African craft, hardwoods, and warm textiles.',
-      price_per_night: 24500,
-      max_guests: 4,
-      bedrooms: 2,
-      bathrooms: 2,
-      sqm: 150,
-      amenities: ['Wi-Fi', 'Rooftop pool', 'Parking', 'Gym', '24/7 security', 'Kitchen', 'Washer', 'Air conditioning'],
-      images: [PEXELS.nairobiSkyline, PEXELS.apartmentInterior, PEXELS.masterBedroom, PEXELS.rooftopPool],
-      location: 'Lavington, Nairobi',
-      lat: -1.2921,
-      lng: 36.8219,
-      status: 'published',
-      rating: 4.92,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      title: 'Kilimani Canvas — A Westlands Retreat',
-      slug: 'kilimani-canvas',
-      collection: 'city',
-      description:
-        'A quiet artists apartment tucked into the leafy streets of Kilimani, walking distance to the best cafés, Yaya Centre, and Gallery Watatu. Sleeps three with a private study nook, linen daybed, and small back garden.',
-      price_per_night: 16800,
-      max_guests: 3,
-      bedrooms: 2,
-      bathrooms: 1,
-      sqm: 105,
-      amenities: ['Wi-Fi', 'Kitchen', 'Workspace', 'Smart TV', 'Secure entry', 'Back garden', 'Air conditioning'],
-      images: [PEXELS.apartmentInterior, PEXELS.masterBedroom, PEXELS.nairobiSkyline],
-      location: 'Kilimani, Nairobi',
-      lat: -1.2897,
-      lng: 36.7836,
-      status: 'published',
-      rating: 4.78,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      title: 'Highland House — Naivasha Countryside',
-      slug: 'highland-house-naivasha',
-      collection: 'countryside',
-      description:
-        'A stone-and-timber farmhouse tucked into the Aberdares foothills with panoramic views of Lake Naivasha. Five acres of private garden, a chef on call, and a fire deck for starry evenings with the sounds of the wild.',
-      price_per_night: 42000,
-      max_guests: 8,
-      bedrooms: 4,
-      bathrooms: 3,
-      sqm: 380,
-      amenities: ['Wi-Fi', 'Fireplace', 'Hot tub', 'Private chef', 'BBQ area', 'Hiking trails', 'Staff included'],
-      images: [PEXELS.highland, PEXELS.lodgeLiving, PEXELS.rusticBedroom, PEXELS.rooftopPool],
-      location: 'Lake Naivasha, Nakuru County',
-      lat: -0.7791,
-      lng: 36.4314,
-      status: 'published',
-      rating: 4.97,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      title: 'Mara Fig — Masai Mara Safari Lodge',
-      slug: 'mara-fig-lodge',
-      collection: 'countryside',
-      description:
-        'Boutique tented suites under ancient fig trees on a private Mara conservancy bordering the Maasai Mara National Reserve. Daily game drives, sundowner bush cocktails, and generous hosting from the resident Maasai team.',
-      price_per_night: 85000,
-      max_guests: 6,
-      bedrooms: 3,
-      bathrooms: 3,
-      sqm: 240,
-      amenities: ['Game drives included', 'En-suite tent', 'Outdoor shower', 'Restaurant', 'Bar', 'Fire pit', 'Conservancy walks'],
-      images: [PEXELS.highland, PEXELS.safariTent, PEXELS.rusticBedroom],
-      location: 'Maasai Mara, Narok County',
-      lat: -1.4922,
-      lng: 35.1123,
-      status: 'published',
-      rating: 4.99,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      title: 'Diani Drift — Beachfront Villa',
-      slug: 'diani-drift-villa',
-      collection: 'beach',
-      description:
-        'A private beachfront Swahili-styled villa on Galu Beach, a short stroll from Diani best beach bars. White sand steps from your veranda, a private chef, and a swaying palm-fringed infinity pool that melts into the Indian Ocean.',
-      price_per_night: 58000,
-      max_guests: 8,
-      bedrooms: 4,
-      bathrooms: 4,
-      sqm: 320,
-      amenities: ['Private beach', 'Infinity pool', 'Kitchen staff', 'Wi-Fi', 'Kayaks', 'Beach lounge', 'BBQ', 'Air conditioning'],
-      images: [PEXELS.dianiBeach, PEXELS.beachLiving, PEXELS.beachBedroom, PEXELS.beachPool],
-      location: 'Diani Beach, Kwale County',
-      lat: -4.3079,
-      lng: 39.58,
-      status: 'published',
-      rating: 4.89,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      title: 'Lamu Light — Shela Private Home',
-      slug: 'lamu-light-shela',
-      collection: 'beach',
-      description:
-        'A restored white-washed Lamu house with hand-carved Swahili doors, a rooftop dhow deck for breakfast and sunsets, and direct access to Shela dunes. Stone Town is a short dhow ride away, and Lamu Old Town a leisurely walk.',
-      price_per_night: 34000,
-      max_guests: 5,
-      bedrooms: 3,
-      bathrooms: 2,
-      sqm: 220,
-      amenities: ['Rooftop deck', 'Dhow trips', 'In-house cook', 'Wi-Fi', 'Beach access', 'Courtyard', 'Museum walk distance'],
-      images: [PEXELS.dianiBeach, PEXELS.beachLiving, PEXELS.beachBedroom],
-      location: 'Shela, Lamu County',
-      lat: -2.2725,
-      lng: 40.9034,
-      status: 'published',
-      rating: 4.84,
-      created_at: now(),
-    },
-  ],
-  bookings: [],
-  reviews: [
-    {
-      id: uid(),
-      property_id: 'will-be-linked-by-seed-post-link',
-      guest_name: 'Amina K.',
-      rating: 5,
-      comment:
-        'The Lavington Loft is exactly as described — the rooftop view alone is worth it. Everything was beautifully considered, from the kitchen supplies to the welcome booklet on Kenyan coffee.',
-      approved: true,
-      created_at: now(),
-    },
-    {
-      id: uid(),
-      property_id: 'will-be-linked-by-seed-post-link',
-      guest_name: 'Wanjiru M.',
-      rating: 5,
-      comment:
-        'Spent four days at Diani Drift. The chef made incredible Swahili breakfasts, and the infinity pool feels almost connected to the sea. We will be back.',
-      approved: true,
-      created_at: now(),
-    },
-  ],
-  contact_messages: [],
-  admins: [
-    {
-      id: 'admin_001',
-      email: process.env.ADMIN_SEED_EMAIL || 'admin@makao254.com',
-      password_hash: '__REPLACE_WITH_BCRYPT_HASH__',
-      role: 'admin',
-      totp_secret: '__REPLACE_WITH_TOTP_SECRET__',
-      created_at: now(),
-    },
-  ],
-  admin_sessions: [],
-};
+/* ---------------- row mapping ---------------- */
 
-seed.reviews[0].property_id = seed.properties[0].id;
-seed.reviews[1].property_id = seed.properties[4].id;
+function toIso(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
 
-function ensureDb() {
-  try {
-    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
-      scheduleAdminMigration();
-    } else {
-      const raw = fs.readFileSync(DB_FILE, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<DatabaseShape>;
-      if (!parsed.properties || !parsed.properties.length) {
-        fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
-        scheduleAdminMigration();
-      } else {
-        let changed = false;
-        if (!parsed.admins) {
-          parsed.admins = seed.admins;
-          changed = true;
-        }
-        if (!parsed.admin_sessions) {
-          parsed.admin_sessions = seed.admin_sessions;
-          changed = true;
-        }
-        if (parsed.properties.some((p) => typeof (p as any).sqm === 'undefined')) {
-          parsed.properties = seed.properties;
-          changed = true;
-        }
-        if (changed) fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2));
-        scheduleAdminMigration();
-      }
-    }
-  } catch {
-    // fallback read-only in-memory for read-only filesystems
+function toDateOnly(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
+}
+
+function num(value: unknown): number {
+  return value === null || value === undefined ? 0 : Number(value);
+}
+
+function numOrNull(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+function mapProperty(r: Record<string, unknown>): Property {
+  return {
+    id: String(r.id),
+    title: String(r.title),
+    slug: String(r.slug),
+    collection: r.collection as Collection,
+    description: (r.description as string) ?? '',
+    price_per_night: num(r.price_per_night),
+    max_guests: num(r.max_guests),
+    bedrooms: num(r.bedrooms),
+    bathrooms: num(r.bathrooms),
+    sqm: numOrNull(r.sqm),
+    amenities: (r.amenities as string[]) ?? [],
+    images: (r.images as string[]) ?? [],
+    location: (r.location as string) ?? '',
+    lat: numOrNull(r.lat),
+    lng: numOrNull(r.lng),
+    status: r.status as PropertyStatus,
+    rating: num(r.rating),
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+function mapBooking(r: Record<string, unknown>): Booking {
+  return {
+    id: String(r.id),
+    property_id: (r.property_id as string) ?? null,
+    guest_name: String(r.guest_name),
+    guest_email: String(r.guest_email),
+    guest_phone: (r.guest_phone as string) ?? null,
+    check_in: toDateOnly(r.check_in),
+    check_out: toDateOnly(r.check_out),
+    guests: num(r.guests),
+    total_price: numOrNull(r.total_price),
+    status: r.status as BookingStatus,
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+function mapReview(r: Record<string, unknown>): Review {
+  return {
+    id: String(r.id),
+    property_id: String(r.property_id),
+    guest_name: String(r.guest_name),
+    rating: num(r.rating),
+    comment: (r.comment as string) ?? null,
+    approved: Boolean(r.approved),
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+function mapContactMessage(r: Record<string, unknown>): ContactMessage {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    email: String(r.email),
+    phone: (r.phone as string) ?? null,
+    subject: (r.subject as string) ?? null,
+    message: String(r.message),
+    source: (r.source as string) ?? 'website',
+    status: r.status as ContactStatus,
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+function mapAdmin(r: Record<string, unknown>): Admin {
+  return {
+    id: String(r.id),
+    email: String(r.email),
+    password_hash: String(r.password_hash),
+    role: r.role as AdminRole,
+    totp_secret: String(r.totp_secret),
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+function mapAdminSession(r: Record<string, unknown>): AdminSession {
+  return {
+    id: String(r.id),
+    admin_id: String(r.admin_id),
+    token_hash: String(r.token_hash),
+    expires_at: toIso(r.expires_at) ?? new Date().toISOString(),
+    created_at: toIso(r.created_at) ?? new Date().toISOString(),
+  };
+}
+
+/** Builds a parameterised `SET a = $1, b = $2` clause from a whitelisted patch. */
+function buildUpdate(
+  patch: Record<string, unknown>,
+  columns: readonly string[],
+  startIndex = 1,
+): { clause: string; values: unknown[] } | null {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const column of columns) {
+    if (!(column in patch) || patch[column] === undefined) continue;
+    values.push(patch[column]);
+    sets.push(`${column} = $${startIndex + values.length - 1}`);
   }
+  if (!sets.length) return null;
+  return { clause: sets.join(', '), values };
 }
 
-let migrationScheduled = false;
-function scheduleAdminMigration() {
-  if (migrationScheduled) return;
-  migrationScheduled = true;
-  queueMicrotask(async () => {
-    try {
-      if (!fs.existsSync(DB_FILE)) return;
-      const raw = fs.readFileSync(DB_FILE, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<DatabaseShape>;
-      if (!parsed.admins) return;
-      let changed = false;
-      for (const admin of parsed.admins) {
-        const needsPassword =
-          admin.password_hash === '__REPLACE_WITH_BCRYPT_HASH__' ||
-          admin.password_hash === '$2a$10$w9l/8T0fC.XbCz/lm2P9NOPXbK.9b86i8c6oV78n8T8N9z2m6b86y';
-        const needsTotp =
-          admin.totp_secret === '__REPLACE_WITH_TOTP_SECRET__' ||
-          admin.totp_secret === 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
-        if (needsPassword) {
-          const password = process.env.ADMIN_SEED_PASSWORD || 'Makao254!Secure';
-          admin.password_hash = await bcrypt.hash(password, 10);
-          changed = true;
-        }
-        if (needsTotp) {
-          admin.totp_secret = generateSecret();
-          changed = true;
-        }
-      }
-      if (changed) fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2));
-    } catch {
-      // migration best-effort
-    } finally {
-      migrationScheduled = false;
-    }
-  });
-}
+const PROPERTY_COLUMNS = [
+  'title', 'slug', 'collection', 'description', 'price_per_night', 'max_guests', 'bedrooms',
+  'bathrooms', 'sqm', 'amenities', 'images', 'location', 'lat', 'lng', 'status', 'rating',
+] as const;
 
-function load(): DatabaseShape {
-  ensureDb();
-  try {
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return JSON.parse(JSON.stringify(seed));
-  }
-}
-
-function save(db: DatabaseShape) {
-  try {
-    ensureDb();
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-  } catch {
-    // ignore on read-only fs
-  }
-}
+const BOOKING_COLUMNS = [
+  'property_id', 'guest_name', 'guest_email', 'guest_phone', 'check_in', 'check_out',
+  'guests', 'total_price', 'status',
+] as const;
 
 /* ===================== PROPERTIES ===================== */
 
 export async function listPublishedProperties(): Promise<Property[]> {
-  const db = load();
-  return db.properties
-    .filter((p) => p.status === 'published')
-    .sort((a, b) => b.rating - a.rating);
+  const rows = await query(
+    `SELECT * FROM properties WHERE status = 'published' ORDER BY rating DESC, created_at DESC`,
+  );
+  return rows.map(mapProperty);
 }
 
 export async function listAllProperties(): Promise<Property[]> {
-  const db = load();
-  return db.properties.slice();
+  const rows = await query(`SELECT * FROM properties ORDER BY created_at DESC`);
+  return rows.map(mapProperty);
 }
 
 export async function getPropertyById(id: string): Promise<Property | undefined> {
-  const db = load();
-  return db.properties.find((p) => p.id === id);
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`SELECT * FROM properties WHERE id = $1`, [id]);
+  return rows[0] ? mapProperty(rows[0]) : undefined;
+}
+
+export async function listPropertiesBySlug(slug: string): Promise<Property | undefined> {
+  const rows = await query(`SELECT * FROM properties WHERE slug = $1`, [slug]);
+  return rows[0] ? mapProperty(rows[0]) : undefined;
 }
 
 export async function createProperty(
   input: Omit<Property, 'id' | 'created_at' | 'rating' | 'status'> & Partial<Pick<Property, 'rating' | 'status' | 'sqm'>>,
 ): Promise<Property> {
-  const db = load();
-  const next: Property = {
-    id: uid(),
-    created_at: now(),
-    rating: input.rating ?? 0,
-    status: input.status ?? 'published',
-    sqm: input.sqm ?? null,
-    title: input.title,
-    slug: input.slug,
-    collection: input.collection,
-    description: input.description,
-    price_per_night: input.price_per_night,
-    max_guests: input.max_guests,
-    bedrooms: input.bedrooms,
-    bathrooms: input.bathrooms,
-    amenities: input.amenities,
-    images: input.images,
-    location: input.location,
-    lat: input.lat,
-    lng: input.lng,
-  };
-  db.properties.unshift(next);
-  save(db);
-  return next;
+  const rows = await query(
+    `INSERT INTO properties
+       (title, slug, collection, description, price_per_night, max_guests, bedrooms, bathrooms,
+        sqm, amenities, images, location, lat, lng, status, rating)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     RETURNING *`,
+    [
+      input.title, input.slug, input.collection, input.description, input.price_per_night,
+      input.max_guests, input.bedrooms, input.bathrooms, input.sqm ?? null, input.amenities,
+      input.images, input.location, input.lat, input.lng, input.status ?? 'published',
+      input.rating ?? 0,
+    ],
+  );
+  return mapProperty(rows[0]);
 }
 
 export async function updateProperty(id: string, patch: Partial<Property>): Promise<Property | undefined> {
-  const db = load();
-  const idx = db.properties.findIndex((p) => p.id === id);
-  if (idx === -1) return undefined;
-  db.properties[idx] = { ...db.properties[idx], ...patch, id };
-  save(db);
-  return db.properties[idx];
+  if (!isUuid(id)) return undefined;
+  const update = buildUpdate(patch, PROPERTY_COLUMNS);
+  if (!update) return getPropertyById(id);
+
+  const rows = await query(
+    `UPDATE properties SET ${update.clause} WHERE id = $${update.values.length + 1} RETURNING *`,
+    [...update.values, id],
+  );
+  return rows[0] ? mapProperty(rows[0]) : undefined;
 }
 
 export async function deleteProperty(id: string): Promise<boolean> {
-  const db = load();
-  const before = db.properties.length;
-  db.properties = db.properties.filter((p) => p.id !== id);
-  save(db);
-  return db.properties.length < before;
+  if (!isUuid(id)) return false;
+  const rows = await query(`DELETE FROM properties WHERE id = $1 RETURNING id`, [id]);
+  return rows.length > 0;
 }
 
 /* ===================== BOOKINGS ===================== */
 
 export async function listBookings(): Promise<Booking[]> {
-  const db = load();
-  return db.bookings.slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const rows = await query(`SELECT * FROM bookings ORDER BY created_at DESC`);
+  return rows.map(mapBooking);
 }
 
 export async function getBookingById(id: string): Promise<Booking | undefined> {
-  const db = load();
-  return db.bookings.find((b) => b.id === id);
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`SELECT * FROM bookings WHERE id = $1`, [id]);
+  return rows[0] ? mapBooking(rows[0]) : undefined;
 }
 
 export async function createBooking(
   input: Omit<Booking, 'id' | 'created_at' | 'status'> & Partial<Pick<Booking, 'status'>>,
 ): Promise<Booking> {
-  const db = load();
-  const next: Booking = {
-    id: uid(),
-    created_at: now(),
-    status: input.status ?? 'pending',
-    property_id: input.property_id ?? null,
-    guest_name: input.guest_name,
-    guest_email: input.guest_email,
-    guest_phone: input.guest_phone ?? null,
-    check_in: input.check_in ?? null,
-    check_out: input.check_out ?? null,
-    guests: input.guests,
-    total_price: input.total_price ?? null,
-  };
-  db.bookings.unshift(next);
-  save(db);
-  return next;
+  const rows = await query(
+    `INSERT INTO bookings
+       (property_id, guest_name, guest_email, guest_phone, check_in, check_out, guests, total_price, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING *`,
+    [
+      isUuid(input.property_id) ? input.property_id : null,
+      input.guest_name, input.guest_email, input.guest_phone ?? null,
+      input.check_in ?? null, input.check_out ?? null, input.guests,
+      input.total_price ?? null, input.status ?? 'pending',
+    ],
+  );
+  return mapBooking(rows[0]);
 }
 
 export async function updateBooking(id: string, patch: Partial<Booking>): Promise<Booking | undefined> {
-  const db = load();
-  const idx = db.bookings.findIndex((b) => b.id === id);
-  if (idx === -1) return undefined;
-  db.bookings[idx] = { ...db.bookings[idx], ...patch, id };
-  save(db);
-  return db.bookings[idx];
+  if (!isUuid(id)) return undefined;
+  const update = buildUpdate(patch, BOOKING_COLUMNS);
+  if (!update) return getBookingById(id);
+
+  const rows = await query(
+    `UPDATE bookings SET ${update.clause} WHERE id = $${update.values.length + 1} RETURNING *`,
+    [...update.values, id],
+  );
+  return rows[0] ? mapBooking(rows[0]) : undefined;
 }
 
 export async function deleteBooking(id: string): Promise<boolean> {
-  const db = load();
-  const before = db.bookings.length;
-  db.bookings = db.bookings.filter((b) => b.id !== id);
-  save(db);
-  return db.bookings.length < before;
+  if (!isUuid(id)) return false;
+  const rows = await query(`DELETE FROM bookings WHERE id = $1 RETURNING id`, [id]);
+  return rows.length > 0;
 }
 
 /* ===================== REVIEWS ===================== */
 
 export async function listApprovedReviews(propertyId?: string): Promise<Review[]> {
-  const db = load();
-  return db.reviews
-    .filter((r) => r.approved && (!propertyId || r.property_id === propertyId))
-    .slice()
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const filter = propertyId ? (isUuid(propertyId) ? propertyId : null) : null;
+  if (propertyId && !filter) return [];
+  const rows = await query(
+    `SELECT * FROM reviews
+     WHERE approved = true AND ($1::uuid IS NULL OR property_id = $1::uuid)
+     ORDER BY created_at DESC`,
+    [filter],
+  );
+  return rows.map(mapReview);
 }
 
 export async function listAllReviews(): Promise<Review[]> {
-  const db = load();
-  return db.reviews.slice();
+  const rows = await query(`SELECT * FROM reviews ORDER BY created_at DESC`);
+  return rows.map(mapReview);
 }
 
 export async function createReview(
   input: Omit<Review, 'id' | 'created_at' | 'approved'> & Partial<Pick<Review, 'approved'>>,
 ): Promise<Review> {
-  const db = load();
-  const next: Review = {
-    id: uid(),
-    created_at: now(),
-    approved: input.approved ?? false,
-    property_id: input.property_id,
-    guest_name: input.guest_name,
-    rating: input.rating,
-    comment: input.comment ?? null,
-  };
-  db.reviews.unshift(next);
-  save(db);
-  return next;
+  if (!isUuid(input.property_id)) throw new Error('A valid property_id is required.');
+  const rows = await query(
+    `INSERT INTO reviews (property_id, guest_name, rating, comment, approved)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING *`,
+    [input.property_id, input.guest_name, input.rating, input.comment ?? null, input.approved ?? false],
+  );
+  return mapReview(rows[0]);
 }
 
 export async function approveReview(id: string): Promise<Review | undefined> {
-  const db = load();
-  const idx = db.reviews.findIndex((r) => r.id === id);
-  if (idx === -1) return undefined;
-  db.reviews[idx].approved = true;
-  save(db);
-  return db.reviews[idx];
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`UPDATE reviews SET approved = true WHERE id = $1 RETURNING *`, [id]);
+  return rows[0] ? mapReview(rows[0]) : undefined;
 }
 
 export async function deleteReview(id: string): Promise<boolean> {
-  const db = load();
-  const before = db.reviews.length;
-  db.reviews = db.reviews.filter((r) => r.id !== id);
-  save(db);
-  return db.reviews.length < before;
+  if (!isUuid(id)) return false;
+  const rows = await query(`DELETE FROM reviews WHERE id = $1 RETURNING id`, [id]);
+  return rows.length > 0;
 }
 
 /* ===================== CONTACT MESSAGES ===================== */
 
 export async function listContactMessages(): Promise<ContactMessage[]> {
-  const db = load();
-  return db.contact_messages.slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const rows = await query(`SELECT * FROM contact_messages ORDER BY created_at DESC`);
+  return rows.map(mapContactMessage);
 }
 
 export async function createContactMessage(
   input: Omit<ContactMessage, 'id' | 'created_at' | 'source' | 'status'> &
     Partial<Pick<ContactMessage, 'source' | 'status'>>,
 ): Promise<ContactMessage> {
-  const db = load();
-  const next: ContactMessage = {
-    id: uid(),
-    created_at: now(),
-    source: input.source ?? 'website',
-    status: input.status ?? 'new',
-    name: input.name,
-    email: input.email,
-    phone: input.phone ?? null,
-    subject: input.subject ?? null,
-    message: input.message,
-  };
-  db.contact_messages.unshift(next);
-  save(db);
-  return next;
+  const rows = await query(
+    `INSERT INTO contact_messages (name, email, phone, subject, message, source, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [
+      input.name, input.email, input.phone ?? null, input.subject ?? null, input.message,
+      input.source ?? 'website', input.status ?? 'new',
+    ],
+  );
+  return mapContactMessage(rows[0]);
 }
 
 export async function updateContactStatus(id: string, status: ContactStatus): Promise<ContactMessage | undefined> {
-  const db = load();
-  const idx = db.contact_messages.findIndex((m) => m.id === id);
-  if (idx === -1) return undefined;
-  db.contact_messages[idx].status = status;
-  save(db);
-  return db.contact_messages[idx];
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`UPDATE contact_messages SET status = $1 WHERE id = $2 RETURNING *`, [status, id]);
+  return rows[0] ? mapContactMessage(rows[0]) : undefined;
 }
 
 export async function deleteContactMessage(id: string): Promise<boolean> {
-  const db = load();
-  const before = db.contact_messages.length;
-  db.contact_messages = db.contact_messages.filter((m) => m.id !== id);
-  save(db);
-  return db.contact_messages.length < before;
+  if (!isUuid(id)) return false;
+  const rows = await query(`DELETE FROM contact_messages WHERE id = $1 RETURNING id`, [id]);
+  return rows.length > 0;
 }
 
 /* ===================== ADMINS & SESSIONS ===================== */
 
 export async function getAdminByEmail(email: string): Promise<Admin | undefined> {
-  const db = load();
-  return db.admins.find((a) => a.email.toLowerCase() === email.toLowerCase());
+  const rows = await query(`SELECT * FROM admins WHERE lower(email) = lower($1)`, [email]);
+  return rows[0] ? mapAdmin(rows[0]) : undefined;
 }
 
 export async function getAdminById(id: string): Promise<Admin | undefined> {
-  const db = load();
-  return db.admins.find((a) => a.id === id);
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`SELECT * FROM admins WHERE id = $1`, [id]);
+  return rows[0] ? mapAdmin(rows[0]) : undefined;
 }
 
 export async function updateAdminPassword(id: string, passwordHash: string): Promise<Admin | undefined> {
-  const db = load();
-  const idx = db.admins.findIndex((a) => a.id === id);
-  if (idx === -1) return undefined;
-  db.admins[idx].password_hash = passwordHash;
-  save(db);
-  return db.admins[idx];
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`UPDATE admins SET password_hash = $1 WHERE id = $2 RETURNING *`, [passwordHash, id]);
+  return rows[0] ? mapAdmin(rows[0]) : undefined;
 }
 
 export async function updateAdminTotp(id: string, totpSecret: string): Promise<Admin | undefined> {
-  const db = load();
-  const idx = db.admins.findIndex((a) => a.id === id);
-  if (idx === -1) return undefined;
-  db.admins[idx].totp_secret = totpSecret;
-  save(db);
-  return db.admins[idx];
+  if (!isUuid(id)) return undefined;
+  const rows = await query(`UPDATE admins SET totp_secret = $1 WHERE id = $2 RETURNING *`, [totpSecret, id]);
+  return rows[0] ? mapAdmin(rows[0]) : undefined;
 }
 
 export async function createAdminSession(input: Omit<AdminSession, 'id' | 'created_at'>): Promise<AdminSession> {
-  const db = load();
-  const next: AdminSession = { id: uid(), created_at: now(), ...input };
-  db.admin_sessions.unshift(next);
-  save(db);
-  return next;
+  const rows = await query(
+    `INSERT INTO admin_sessions (admin_id, token_hash, expires_at) VALUES ($1,$2,$3) RETURNING *`,
+    [input.admin_id, input.token_hash, input.expires_at],
+  );
+  return mapAdminSession(rows[0]);
 }
 
 export async function getAdminSessionByTokenHash(tokenHash: string): Promise<AdminSession | undefined> {
-  const db = load();
-  return db.admin_sessions.find((s) => s.token_hash === tokenHash);
+  const rows = await query(`SELECT * FROM admin_sessions WHERE token_hash = $1`, [tokenHash]);
+  return rows[0] ? mapAdminSession(rows[0]) : undefined;
 }
 
 export async function revokeAdminSession(id: string): Promise<boolean> {
-  const db = load();
-  const before = db.admin_sessions.length;
-  db.admin_sessions = db.admin_sessions.filter((s) => s.id !== id);
-  save(db);
-  return db.admin_sessions.length < before;
+  if (!isUuid(id)) return false;
+  const rows = await query(`DELETE FROM admin_sessions WHERE id = $1 RETURNING id`, [id]);
+  return rows.length > 0;
 }
 
 export async function pruneExpiredAdminSessions(): Promise<void> {
-  const db = load();
-  const nowIso = now();
-  db.admin_sessions = db.admin_sessions.filter((s) => s.expires_at > nowIso);
-  save(db);
-}
-
-export async function listPropertiesBySlug(slug: string): Promise<Property | undefined> {
-  const db = load();
-  return db.properties.find((p) => p.slug === slug);
+  await query(`DELETE FROM admin_sessions WHERE expires_at <= now()`);
 }
