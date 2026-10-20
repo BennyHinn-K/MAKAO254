@@ -4,6 +4,7 @@ import {
   deleteProperty,
   getPropertyById,
   listAllProperties,
+  listPropertiesBySlug,
   listPublishedProperties,
   updateProperty,
   type Collection,
@@ -17,6 +18,7 @@ const collectionMap: Record<string, Exclude<import('@/lib/db').Property, never>[
 
 function toListing(property: {
   id: string;
+  slug?: string;
   title: string;
   location: string | null;
   collection: Collection;
@@ -25,8 +27,10 @@ function toListing(property: {
   rating: number;
   images: string[];
 }) {
+  const titleSlug = (property.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return {
     id: property.id,
+    slug: property.slug || titleSlug || property.id,
     title: property.title,
     location: property.location ?? '',
     collection:
@@ -45,6 +49,12 @@ function toListing(property: {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const slug = searchParams.get('slug');
+    if (slug) {
+      const property = await listPropertiesBySlug(slug);
+      if (!property) return NextResponse.json({ error: 'Property not found.' }, { status: 404 });
+      return NextResponse.json(property);
+    }
     const admin = searchParams.get('all') === 'true';
     const rows = admin ? await listAllProperties() : await listPublishedProperties();
     return NextResponse.json(rows.map(toListing));
@@ -68,6 +78,7 @@ export async function POST(request: NextRequest) {
       max_guests: Number.isFinite(Number(body.max_guests)) ? Math.max(1, Number(body.max_guests)) : 2,
       bedrooms: Number.isFinite(Number(body.bedrooms)) ? Math.max(1, Number(body.bedrooms)) : 1,
       bathrooms: Number.isFinite(Number(body.bathrooms)) ? Math.max(1, Number(body.bathrooms)) : 1,
+      sqm: Number.isFinite(Number(body.sqm)) ? Number(body.sqm) : null,
       amenities: Array.isArray(body.amenities) ? body.amenities.map((a: unknown) => String(a)) : [],
       images: Array.isArray(body.images) ? body.images.map((a: unknown) => String(a)) : [],
       location: typeof body.location === 'string' ? body.location.trim() : '',

@@ -1,10 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as bcrypt from 'bcryptjs';
+import { generateSecret } from 'otplib';
 
 export type Collection = 'city' | 'countryside' | 'beach';
 export type PropertyStatus = 'draft' | 'published';
 export type BookingStatus = 'pending' | 'confirmed' | 'cancelled';
 export type ContactStatus = 'new' | 'read' | 'replied';
+export type AdminRole = 'admin' | 'viewer';
 
 export interface Property {
   id: string;
@@ -16,6 +19,7 @@ export interface Property {
   max_guests: number;
   bedrooms: number;
   bathrooms: number;
+  sqm: number | null;
   amenities: string[];
   images: string[];
   location: string;
@@ -62,20 +66,48 @@ export interface ContactMessage {
   created_at: string;
 }
 
+export interface Admin {
+  id: string;
+  email: string;
+  password_hash: string;
+  role: AdminRole;
+  totp_secret: string;
+  created_at: string;
+}
+
+export interface AdminSession {
+  id: string;
+  admin_id: string;
+  token_hash: string;
+  expires_at: string;
+  created_at: string;
+}
+
 interface DatabaseShape {
   properties: Property[];
   bookings: Booking[];
   reviews: Review[];
   contact_messages: ContactMessage[];
+  admins: Admin[];
+  admin_sessions: AdminSession[];
 }
 
 const DB_DIR = path.resolve(process.cwd(), '.data');
 const DB_FILE = path.join(DB_DIR, 'makao254.json');
 
-const SEED_IMAGES = {
-  city: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Premium%20photorealistic%20architectural%20photography%20of%20a%20luxury%20high-rise%20BnB%20in%20Nairobi%20Kenya%20with%20panoramic%20skyline%20view%2C%20floor%20to%20ceiling%20windows%2C%20sunset%20golden%20light%2C%20modern%20African%20interior%20design&image_size=landscape_4_3',
-  beach: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Premium%20photorealistic%20architectural%20photography%20of%20a%20luxury%20beachfront%20BnB%20on%20the%20Kenyan%20coast%20near%20Mombasa%2C%20private%20beach%20access%2C%20palm%20trees%2C%20turquoise%20Indian%20Ocean%2C%20golden%20hour%20sunlight%2C%20elegant%20Swahili%20architecture&image_size=landscape_4_3',
-  countryside: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Breathtaking%20view%20from%20a%20luxury%20countryside%20BnB%20in%20the%20Kenyan%20highlands%20near%20Naivasha%2C%20rolling%20green%20hills%2C%20acacia%20trees%2C%20traditional%20stone%20and%20thatched%20roof%20lodge%2C%20dramatic%20sunset%20sky%2C%20African%20landscape&image_size=landscape_4_3',
+const PEXELS = {
+  nairobiSkyline: 'https://images.pexels.com/photos/11341669/pexels-photo-11341669.jpeg?auto=compress&cs=tinysrgb&w=1600',
+  apartmentInterior: 'https://images.pexels.com/photos/3634634/pexels-photo-3634634.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  masterBedroom: 'https://images.pexels.com/photos/545012/pexels-photo-545012.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  rooftopPool: 'https://images.pexels.com/photos/261397/pexels-photo-261397.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  dianiBeach: 'https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=1600',
+  beachLiving: 'https://images.pexels.com/photos/271639/pexels-photo-271639.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  beachBedroom: 'https://images.pexels.com/photos/164595/pexels-photo-164595.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  beachPool: 'https://images.pexels.com/photos/1546168/pexels-photo-1546168.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  highland: 'https://images.pexels.com/photos/434263/pexels-photo-434263.jpeg?auto=compress&cs=tinysrgb&w=1600',
+  lodgeLiving: 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  rusticBedroom: 'https://images.pexels.com/photos/5099325/pexels-photo-5099325.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  safariTent: 'https://images.pexels.com/photos/7562315/pexels-photo-7562315.jpeg?auto=compress&cs=tinysrgb&w=1200',
 };
 
 function uid() {
@@ -98,16 +130,14 @@ const seed: DatabaseShape = {
       slug: 'the-lavington-loft',
       collection: 'city',
       description:
-        'A sun-drenched design-led penthouse in the heart of Lavington with wrap-around views of the Nairobi skyline, private rooftop terrace, and curated interiors inspired by modern African craft.',
+        'A sun-drenched, design-led penthouse in the heart of Lavington, with wrap-around views of the Nairobi skyline, a private rooftop terrace, and interiors curated with modern African craft, hardwoods, and warm textiles.',
       price_per_night: 24500,
       max_guests: 4,
       bedrooms: 2,
       bathrooms: 2,
-      amenities: ['Wi-Fi', 'Rooftop pool', 'Parking', 'Gym', '24/7 security', 'Kitchen', 'Washer'],
-      images: [
-        SEED_IMAGES.city,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxury%20BnB%20living%20room%20interior%20in%20Nairobi%2C%20floor%20to%20ceiling%20windows%2C%20warm%20leather%20sofa%2C%20African%20art%20on%20walls%2C%20wooden%20floor%2C%20afternoon%20light&image_size=landscape_4_3',
-      ],
+      sqm: 150,
+      amenities: ['Wi-Fi', 'Rooftop pool', 'Parking', 'Gym', '24/7 security', 'Kitchen', 'Washer', 'Air conditioning'],
+      images: [PEXELS.nairobiSkyline, PEXELS.apartmentInterior, PEXELS.masterBedroom, PEXELS.rooftopPool],
       location: 'Lavington, Nairobi',
       lat: -1.2921,
       lng: 36.8219,
@@ -121,16 +151,14 @@ const seed: DatabaseShape = {
       slug: 'kilimani-canvas',
       collection: 'city',
       description:
-        'A quiet artists apartment tucked into the leafy streets of Kilimani, walking distance to great cafés, Yaya Centre, and Gallery Watatu. Sleeps 3 with a private study nook.',
+        'A quiet artists apartment tucked into the leafy streets of Kilimani, walking distance to the best cafés, Yaya Centre, and Gallery Watatu. Sleeps three with a private study nook, linen daybed, and small back garden.',
       price_per_night: 16800,
       max_guests: 3,
       bedrooms: 2,
       bathrooms: 1,
-      amenities: ['Wi-Fi', 'Kitchen', 'Workspace', 'Smart TV', 'Secure entry', 'Back garden'],
-      images: [
-        SEED_IMAGES.city,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Elegant%20minimalist%20Kilimani%20apartment%20bedroom%20with%20linen%20bedding%2C%20sheer%20curtains%2C%20plants%2C%20Nairobi%20green%20outdoor%20view&image_size=landscape_4_3',
-      ],
+      sqm: 105,
+      amenities: ['Wi-Fi', 'Kitchen', 'Workspace', 'Smart TV', 'Secure entry', 'Back garden', 'Air conditioning'],
+      images: [PEXELS.apartmentInterior, PEXELS.masterBedroom, PEXELS.nairobiSkyline],
       location: 'Kilimani, Nairobi',
       lat: -1.2897,
       lng: 36.7836,
@@ -144,16 +172,14 @@ const seed: DatabaseShape = {
       slug: 'highland-house-naivasha',
       collection: 'countryside',
       description:
-        'A stone-and-timber farmhouse tucked into the Aberdares foothills with views of Lake Naivasha. Five acres of private garden, a chef on call, and a fire deck for starry evenings.',
+        'A stone-and-timber farmhouse tucked into the Aberdares foothills with panoramic views of Lake Naivasha. Five acres of private garden, a chef on call, and a fire deck for starry evenings with the sounds of the wild.',
       price_per_night: 42000,
       max_guests: 8,
       bedrooms: 4,
       bathrooms: 3,
+      sqm: 380,
       amenities: ['Wi-Fi', 'Fireplace', 'Hot tub', 'Private chef', 'BBQ area', 'Hiking trails', 'Staff included'],
-      images: [
-        SEED_IMAGES.countryside,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20Kenyan%20highland%20lodge%20living%20room%20with%20large%20stone%20fireplace%2C%20leather%20sofas%2C%20wooden%20beams%2C%20panoramic%20green%20hill%20views&image_size=landscape_4_3',
-      ],
+      images: [PEXELS.highland, PEXELS.lodgeLiving, PEXELS.rusticBedroom, PEXELS.rooftopPool],
       location: 'Lake Naivasha, Nakuru County',
       lat: -0.7791,
       lng: 36.4314,
@@ -167,16 +193,14 @@ const seed: DatabaseShape = {
       slug: 'mara-fig-lodge',
       collection: 'countryside',
       description:
-        'Boutique tented suites under ancient fig trees on a private Mara conservancy bordering the Maasai Mara National Reserve. Daily game drives, sundowner bush cocktails, and authentic Maasai hosting.',
+        'Boutique tented suites under ancient fig trees on a private Mara conservancy bordering the Maasai Mara National Reserve. Daily game drives, sundowner bush cocktails, and generous hosting from the resident Maasai team.',
       price_per_night: 85000,
       max_guests: 6,
       bedrooms: 3,
       bathrooms: 3,
+      sqm: 240,
       amenities: ['Game drives included', 'En-suite tent', 'Outdoor shower', 'Restaurant', 'Bar', 'Fire pit', 'Conservancy walks'],
-      images: [
-        SEED_IMAGES.countryside,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20safari%20tent%20suite%20Maasai%20Mara%20at%20sunset%2C%20canopied%20bed%2C%20elegant%20furniture%2C%20savanna%20plains%20view%20through%20opening%2C%20warm%20lantern%20light&image_size=landscape_4_3',
-      ],
+      images: [PEXELS.highland, PEXELS.safariTent, PEXELS.rusticBedroom],
       location: 'Maasai Mara, Narok County',
       lat: -1.4922,
       lng: 35.1123,
@@ -190,19 +214,17 @@ const seed: DatabaseShape = {
       slug: 'diani-drift-villa',
       collection: 'beach',
       description:
-        'A private beachfront Swahili-styled villa on Galu Beach, a short stroll from Diani\'s best beach bars. White sand steps from your veranda, a private chef, and swaying palm-fringed infinity pool.',
+        'A private beachfront Swahili-styled villa on Galu Beach, a short stroll from Diani best beach bars. White sand steps from your veranda, a private chef, and a swaying palm-fringed infinity pool that melts into the Indian Ocean.',
       price_per_night: 58000,
       max_guests: 8,
       bedrooms: 4,
       bathrooms: 4,
-      amenities: ['Private beach', 'Infinity pool', 'Kitchen staff', 'Wi-Fi', 'Kayaks', 'Beach lounge', 'BBQ'],
-      images: [
-        SEED_IMAGES.beach,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20Swahili%20beach%20villa%20bedroom%20white%20linen%204%20poster%20bed%2C%20sheer%20mosquito%20net%2C%20ocean%20breeze%20through%20open%20doors%2C%20warm%20morning%20light&image_size=landscape_4_3',
-      ],
+      sqm: 320,
+      amenities: ['Private beach', 'Infinity pool', 'Kitchen staff', 'Wi-Fi', 'Kayaks', 'Beach lounge', 'BBQ', 'Air conditioning'],
+      images: [PEXELS.dianiBeach, PEXELS.beachLiving, PEXELS.beachBedroom, PEXELS.beachPool],
       location: 'Diani Beach, Kwale County',
       lat: -4.3079,
-      lng: 39.5800,
+      lng: 39.58,
       status: 'published',
       rating: 4.89,
       created_at: now(),
@@ -213,16 +235,14 @@ const seed: DatabaseShape = {
       slug: 'lamu-light-shela',
       collection: 'beach',
       description:
-        'A restored white-washed Lamu house with hand-carved Swahili doors, a rooftop dhow deck for breakfast, and direct access to Shela dunes. Stone Town is a short dhow ride away.',
+        'A restored white-washed Lamu house with hand-carved Swahili doors, a rooftop dhow deck for breakfast and sunsets, and direct access to Shela dunes. Stone Town is a short dhow ride away, and Lamu Old Town a leisurely walk.',
       price_per_night: 34000,
       max_guests: 5,
       bedrooms: 3,
       bathrooms: 2,
+      sqm: 220,
       amenities: ['Rooftop deck', 'Dhow trips', 'In-house cook', 'Wi-Fi', 'Beach access', 'Courtyard', 'Museum walk distance'],
-      images: [
-        SEED_IMAGES.beach,
-        'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Swahili%20Lamu%20stone%20town%20house%20interior%20courtyard%2C%20whitewashed%20walls%2C%20wooden%20carved%20doors%2C%20terracotta%20pots%2C%20bougainvillea%2C%20dappled%20light&image_size=landscape_4_3',
-      ],
+      images: [PEXELS.dianiBeach, PEXELS.beachLiving, PEXELS.beachBedroom],
       location: 'Shela, Lamu County',
       lat: -2.2725,
       lng: 40.9034,
@@ -239,31 +259,108 @@ const seed: DatabaseShape = {
       guest_name: 'Amina K.',
       rating: 5,
       comment:
-        'The Lavington Loft is exactly as described — the rooftop view alone is worth it. Everything was beautifully considered, from the kitchen supplies to the welcome booklet.',
+        'The Lavington Loft is exactly as described — the rooftop view alone is worth it. Everything was beautifully considered, from the kitchen supplies to the welcome booklet on Kenyan coffee.',
+      approved: true,
+      created_at: now(),
+    },
+    {
+      id: uid(),
+      property_id: 'will-be-linked-by-seed-post-link',
+      guest_name: 'Wanjiru M.',
+      rating: 5,
+      comment:
+        'Spent four days at Diani Drift. The chef made incredible Swahili breakfasts, and the infinity pool feels almost connected to the sea. We will be back.',
       approved: true,
       created_at: now(),
     },
   ],
   contact_messages: [],
+  admins: [
+    {
+      id: 'admin_001',
+      email: process.env.ADMIN_SEED_EMAIL || 'admin@makao254.com',
+      password_hash: '__REPLACE_WITH_BCRYPT_HASH__',
+      role: 'admin',
+      totp_secret: '__REPLACE_WITH_TOTP_SECRET__',
+      created_at: now(),
+    },
+  ],
+  admin_sessions: [],
 };
 
 seed.reviews[0].property_id = seed.properties[0].id;
+seed.reviews[1].property_id = seed.properties[4].id;
 
 function ensureDb() {
   try {
     if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
     if (!fs.existsSync(DB_FILE)) {
       fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
+      scheduleAdminMigration();
     } else {
       const raw = fs.readFileSync(DB_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as Partial<DatabaseShape>;
       if (!parsed.properties || !parsed.properties.length) {
         fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
+        scheduleAdminMigration();
+      } else {
+        let changed = false;
+        if (!parsed.admins) {
+          parsed.admins = seed.admins;
+          changed = true;
+        }
+        if (!parsed.admin_sessions) {
+          parsed.admin_sessions = seed.admin_sessions;
+          changed = true;
+        }
+        if (parsed.properties.some((p) => typeof (p as any).sqm === 'undefined')) {
+          parsed.properties = seed.properties;
+          changed = true;
+        }
+        if (changed) fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2));
+        scheduleAdminMigration();
       }
     }
-  } catch (err) {
+  } catch {
     // fallback read-only in-memory for read-only filesystems
   }
+}
+
+let migrationScheduled = false;
+function scheduleAdminMigration() {
+  if (migrationScheduled) return;
+  migrationScheduled = true;
+  queueMicrotask(async () => {
+    try {
+      if (!fs.existsSync(DB_FILE)) return;
+      const raw = fs.readFileSync(DB_FILE, 'utf8');
+      const parsed = JSON.parse(raw) as Partial<DatabaseShape>;
+      if (!parsed.admins) return;
+      let changed = false;
+      for (const admin of parsed.admins) {
+        const needsPassword =
+          admin.password_hash === '__REPLACE_WITH_BCRYPT_HASH__' ||
+          admin.password_hash === '$2a$10$w9l/8T0fC.XbCz/lm2P9NOPXbK.9b86i8c6oV78n8T8N9z2m6b86y';
+        const needsTotp =
+          admin.totp_secret === '__REPLACE_WITH_TOTP_SECRET__' ||
+          admin.totp_secret === 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+        if (needsPassword) {
+          const password = process.env.ADMIN_SEED_PASSWORD || 'Makao254!Secure';
+          admin.password_hash = await bcrypt.hash(password, 10);
+          changed = true;
+        }
+        if (needsTotp) {
+          admin.totp_secret = generateSecret();
+          changed = true;
+        }
+      }
+      if (changed) fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2));
+    } catch {
+      // migration best-effort
+    } finally {
+      migrationScheduled = false;
+    }
+  });
 }
 
 function load(): DatabaseShape {
@@ -305,7 +402,7 @@ export async function getPropertyById(id: string): Promise<Property | undefined>
 }
 
 export async function createProperty(
-  input: Omit<Property, 'id' | 'created_at' | 'rating' | 'status'> & Partial<Pick<Property, 'rating' | 'status'>>,
+  input: Omit<Property, 'id' | 'created_at' | 'rating' | 'status'> & Partial<Pick<Property, 'rating' | 'status' | 'sqm'>>,
 ): Promise<Property> {
   const db = load();
   const next: Property = {
@@ -313,6 +410,7 @@ export async function createProperty(
     created_at: now(),
     rating: input.rating ?? 0,
     status: input.status ?? 'published',
+    sqm: input.sqm ?? null,
     title: input.title,
     slug: input.slug,
     collection: input.collection,
@@ -493,4 +591,67 @@ export async function deleteContactMessage(id: string): Promise<boolean> {
   db.contact_messages = db.contact_messages.filter((m) => m.id !== id);
   save(db);
   return db.contact_messages.length < before;
+}
+
+/* ===================== ADMINS & SESSIONS ===================== */
+
+export async function getAdminByEmail(email: string): Promise<Admin | undefined> {
+  const db = load();
+  return db.admins.find((a) => a.email.toLowerCase() === email.toLowerCase());
+}
+
+export async function getAdminById(id: string): Promise<Admin | undefined> {
+  const db = load();
+  return db.admins.find((a) => a.id === id);
+}
+
+export async function updateAdminPassword(id: string, passwordHash: string): Promise<Admin | undefined> {
+  const db = load();
+  const idx = db.admins.findIndex((a) => a.id === id);
+  if (idx === -1) return undefined;
+  db.admins[idx].password_hash = passwordHash;
+  save(db);
+  return db.admins[idx];
+}
+
+export async function updateAdminTotp(id: string, totpSecret: string): Promise<Admin | undefined> {
+  const db = load();
+  const idx = db.admins.findIndex((a) => a.id === id);
+  if (idx === -1) return undefined;
+  db.admins[idx].totp_secret = totpSecret;
+  save(db);
+  return db.admins[idx];
+}
+
+export async function createAdminSession(input: Omit<AdminSession, 'id' | 'created_at'>): Promise<AdminSession> {
+  const db = load();
+  const next: AdminSession = { id: uid(), created_at: now(), ...input };
+  db.admin_sessions.unshift(next);
+  save(db);
+  return next;
+}
+
+export async function getAdminSessionByTokenHash(tokenHash: string): Promise<AdminSession | undefined> {
+  const db = load();
+  return db.admin_sessions.find((s) => s.token_hash === tokenHash);
+}
+
+export async function revokeAdminSession(id: string): Promise<boolean> {
+  const db = load();
+  const before = db.admin_sessions.length;
+  db.admin_sessions = db.admin_sessions.filter((s) => s.id !== id);
+  save(db);
+  return db.admin_sessions.length < before;
+}
+
+export async function pruneExpiredAdminSessions(): Promise<void> {
+  const db = load();
+  const nowIso = now();
+  db.admin_sessions = db.admin_sessions.filter((s) => s.expires_at > nowIso);
+  save(db);
+}
+
+export async function listPropertiesBySlug(slug: string): Promise<Property | undefined> {
+  const db = load();
+  return db.properties.find((p) => p.slug === slug);
 }

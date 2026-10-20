@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   ArrowRight,
   BedDouble,
@@ -8,6 +9,7 @@ import {
   Compass,
   Heart,
   Menu,
+  MessageCircle,
   Search,
   ShieldCheck,
   Sparkles,
@@ -15,20 +17,23 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { heroVariants } from '@/lib/copy';
+import { OptimizedVideo } from '@/components/ui/optimized-video';
 
 const heroImages = {
-  city: '/images/city/lucid-origin_Premium_photorealistic_architectural_photography_of_a_luxury_high-rise_BnB_in_Na-2.jpg',
-  cityInterior: '/images/city/lucid-origin_2._CITY_—_INSIDE_HOUSE_Premium_luxury_BnB_apartment_interior_in_Nairobi_Kenya.-0.jpg',
-  cityBedroom: '/images/city/lucid-origin_3._CITY_—_MASTER_BEDROOM_Luxurious_master_bedroom_inside_a_premium_Nairobi_BnB-1.jpg',
-  cityPool: '/images/city/lucid-origin_4._CITY_—_SWIMMING_POOL_Stunning_rooftop_infinity_swimming_pool_at_a_luxury_hi-2.jpg',
-  beach: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Premium%20photorealistic%20architectural%20photography%20of%20a%20luxury%20beachfront%20BnB%20on%20the%20Kenyan%20coast%20near%20Mombasa%2C%20private%20beach%20access%2C%20palm%20trees%2C%20turquoise%20Indian%20Ocean%2C%20golden%20hour%20sunlight%2C%20elegant%20Swahili%20architecture&image_size=landscape_16_9',
-  beachInterior: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20beachfront%20BnB%20interior%20on%20the%20Kenyan%20coast%2C%20spacious%20open%20plan%20living%20room%2C%20floor%20to%20ceiling%20glass%20doors%20facing%20ocean%2C%20light%20linen%20furniture%2C%20macram%C3%A9%20accents%2C%20natural%20wood%2C%20warm%20morning%20light&image_size=landscape_4_3',
-  beachBedroom: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20master%20bedroom%20inside%20a%20premium%20beachfront%20BnB%20on%20the%20Kenyan%20coast%2C%20king%20bed%20with%20white%20linen%2C%20ocean%20view%20through%20large%20windows%2C%20rattan%20furniture%2C%20sheer%20curtains%2C%20soft%20natural%20light&image_size=landscape_4_3',
-  beachPool: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Stunning%20luxury%20infinity%20swimming%20pool%20at%20a%20premium%20beachfront%20BnB%20on%20the%20Kenyan%20coast%2C%20pool%20merges%20with%20turquoise%20ocean%20horizon%2C%20lounge%20chairs%2C%20palm%20trees%2C%20tropical%20landscaping%2C%20bright%20sunny%20day&image_size=landscape_4_3',
-  countryside: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Breathtaking%20view%20from%20a%20luxury%20countryside%20BnB%20in%20the%20Kenyan%20highlands%20near%20Naivasha%2C%20rolling%20green%20hills%2C%20acacia%20trees%2C%20traditional%20stone%20and%20thatched%20roof%20lodge%2C%20dramatic%20sunset%20sky%2C%20African%20landscape&image_size=landscape_16_9',
-  countrysideInterior: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20countryside%20BnB%20interior%20in%20the%20Kenyan%20highlands%2C%20spacious%20lodge%20living%20room%2C%20high%20ceiling%20with%20exposed%20wooden%20beams%2C%20large%20stone%20fireplace%2C%20leather%20sofas%2C%20panoramic%20windows%20facing%20green%20hills%2C%20warm%20ambient%20light&image_size=landscape_4_3',
-  countrysideBedroom: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Luxurious%20master%20bedroom%20inside%20a%20premium%20Kenyan%20countryside%20lodge%2C%20four%20poster%20bed%2C%20wooden%20furniture%2C%20African%20art%20and%20textile%20accents%2C%20fireplace%2C%20large%20windows%20with%20green%20highland%20view%2C%20cozy%20warm%20lighting&image_size=landscape_4_3',
-  countrysidePool: 'https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Elegant%20outdoor%20infinity%20style%20swimming%20pool%20at%20a%20luxury%20Kenyan%20highland%20countryside%20lodge%2C%20stone%20terrace%2C%20lounge%20chairs%2C%20overlooking%20rolling%20green%20valleys%20and%20acacia%20trees%2C%20misty%20morning%20atmosphere&image_size=landscape_4_3',
+  city: '/images/city/city-hero.jpg',
+  cityInterior: '/images/city/city-interior.jpg',
+  cityBedroom: '/images/city/city-bedroom.jpg',
+  cityPool: '/images/city/city-pool.jpg',
+  beach: 'https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=1600',
+  beachInterior: 'https://images.pexels.com/photos/271639/pexels-photo-271639.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  beachBedroom: 'https://images.pexels.com/photos/164595/pexels-photo-164595.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  beachPool: 'https://images.pexels.com/photos/1546168/pexels-photo-1546168.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  countryside: 'https://images.pexels.com/photos/434263/pexels-photo-434263.jpeg?auto=compress&cs=tinysrgb&w=1600',
+  countrysideInterior: 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  countrysideBedroom: 'https://images.pexels.com/photos/5099325/pexels-photo-5099325.jpeg?auto=compress&cs=tinysrgb&w=1200',
+  countrysidePool: 'https://images.pexels.com/photos/261397/pexels-photo-261397.jpeg?auto=compress&cs=tinysrgb&w=1200',
 };
 
 const heroSlides = [
@@ -40,6 +45,7 @@ type Collection = 'All' | 'City' | 'Countryside' | 'Beach';
 
 type Listing = {
   id: string;
+  slug: string;
   title: string;
   location: string;
   collection: Exclude<Collection, 'All'>;
@@ -66,6 +72,12 @@ function collectionLabel(value: string): Exclude<Collection, 'All'> {
   return 'Beach';
 }
 
+function waLink(title: string, slug?: string) {
+  const number = process.env.NEXT_PUBLIC_WHATSAPP_BUSINESS_NUMBER || '254700254254';
+  const text = `Hi Makao254, I'd like to know more about ${title}${slug ? ` (${slug})` : ''}.`;
+  return `https://wa.me/${number.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(text)}`;
+}
+
 export default function Home() {
   const [activeCollection, setActiveCollection] = useState<Collection>('All');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -77,6 +89,9 @@ export default function Home() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
   const [heroSlide, setHeroSlide] = useState(0);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const variant = searchParams.get('v')?.toLowerCase() === 'b' ? heroVariants.B : heroVariants.A;
 
   useEffect(() => {
     const timer = window.setInterval(() => setHeroSlide((current) => (current + 1) % heroSlides.length), 9000);
@@ -143,13 +158,12 @@ export default function Home() {
     <main className="makao-shell">
       <section className="hero" id="top">
         <div className="hero-media" aria-hidden="true">
-          {heroSlides[heroSlide].video ? (
-            <video key={heroSlides[heroSlide].video} autoPlay muted loop playsInline poster={heroSlides[heroSlide].fallback}>
-              <source src={heroSlides[heroSlide].video} type="video/mp4" />
-            </video>
-          ) : (
-            <img key={heroSlides[heroSlide].fallback} src={heroSlides[heroSlide].fallback} alt="" />
-          )}
+          <OptimizedVideo
+            key={heroSlides[heroSlide].video}
+            src={heroSlides[heroSlide].video}
+            poster={heroSlides[heroSlide].fallback}
+            isAboveFold
+          />
         </div>
         <nav className="nav container">
           <a className="brand" href="#top" aria-label="Makao254 home"><span className="brand-mark">M</span><span>Makao<span className="brand-number">254</span></span></a>
@@ -162,9 +176,9 @@ export default function Home() {
           <button className="icon-button menu-button" aria-label="Open menu" onClick={() => setMenuOpen((open) => !open)}>{menuOpen ? <X size={22} /> : <Menu size={22} />}</button>
         </nav>
         <div className="hero-content container">
-          <p className="eyebrow light"><Sparkles size={14} /> A softer way to stay in Kenya</p>
-          <h1>Come home<br /><em>to Kenya.</em></h1>
-          <p className="hero-copy">Curated homes for the way you want to feel — from Nairobi’s skyline to the coast’s first light.</p>
+          <p className="eyebrow light"><Sparkles size={14} /> {variant.eyebrow}</p>
+          <h1>{variant.headline[0]}<br /><em>{variant.headline[1]}</em></h1>
+          <p className="hero-copy">{variant.subheading}</p>
           <a className="button button-light" href="#stays">Explore stays <ArrowRight size={17} /></a>
         </div>
         <div className="hero-footer container"><span>Scroll to discover</span><span className="scroll-line" /><span className="hero-location">{heroSlides[heroSlide].label}</span><div className="hero-dots" aria-label="Hero slides">{heroSlides.map((slide, index) => <button key={slide.label} className={index === heroSlide ? 'hero-dot active' : 'hero-dot'} aria-label={`Show ${slide.label}`} onClick={() => setHeroSlide(index)} />)}</div></div>
@@ -206,10 +220,20 @@ export default function Home() {
           {!loading && visibleListings.map((listing) => (
             <article className="listing-card" key={listing.id}>
               <div className="listing-image">
-                <img src={listing.image} alt={listing.title} />
+                <img src={listing.image} alt={listing.title} loading="lazy" />
                 <button className="save-button" aria-label={`Save ${listing.title}`} onClick={() => toggleSaved(listing.id)}>
                   <Heart size={19} fill={savedIds.includes(listing.id) ? 'currentColor' : 'none'} />
                 </button>
+                <a
+                  className="whatsapp-chip"
+                  href={waLink(listing.title, listing.slug)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Chat on WhatsApp about ${listing.title}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MessageCircle size={14} />
+                </a>
                 {listing.tag && <span className="listing-tag">{listing.tag}</span>}
               </div>
               <div className="listing-info">
@@ -220,7 +244,12 @@ export default function Home() {
                 <span><BedDouble size={15} /> {listing.beds} bedrooms</span>
                 <span><b>KES {formatPrice(listing.price)}</b> / night</span>
               </div>
-              <button className="listing-link" onClick={() => openBooking(listing)}>View stay <ArrowRight size={15} /></button>
+              <div className="listing-actions">
+                <button className="listing-link" onClick={() => router.push(`/properties/${encodeURIComponent(listing.slug)}`)}>
+                  View stay <ArrowRight size={15} />
+                </button>
+                <button className="ghost-link" onClick={() => openBooking(listing)}>Quick enquiry</button>
+              </div>
             </article>
           ))}
         </div>
